@@ -116,27 +116,35 @@ svg{width:100%;height:auto;display:block}
 /* ============ Config de l'événement (tout ce qui est spécifique à CETTE course) ============ */
 /* Un profil sportif (générique) peut un jour préparer plusieurs événements comme celui-ci.
    Pour l'instant un seul événement actif, mais tout ce qui lui est propre reste ici. */
-const EVENT = {
-  id: 'ultra-morzine-2027',
-  name: 'Ultra Spartan Morzine-Avoriaz',
-  shortName: 'Ultra Morzine',
-  dateLabel: '2 juillet 2027',
-  finishLabel: 'Nyon · 2 juil.',
-  start: new Date(2026, 9, 5),   // lundi 5 octobre 2026
-  race:  new Date(2027, 6, 2),   // vendredi 2 juillet 2027
-  nw: 39, peakW: 35,
-  phases: ['Base','Volume','Spécifique','Pic','Affûtage'],
-  phaseStart: [0,10,21,30,36],
-  caps: {1:90,2:150,3:240,4:300,5:150},
-  layout: {
-    3:[['Mar','run'],['Jeu','str'],['Sam','long']],
-    4:[['Lun','str'],['Mar','run'],['Jeu','q'],['Sam','long']],
-    5:[['Lun','str'],['Mar','run'],['Mer','str2'],['Jeu','q'],['Sam','long']],
-    6:[['Lun','str'],['Mar','run'],['Mer','str2'],['Jeu','q'],['Sam','long'],['Dim','b2b']]
-  },
-  raceSession: {title:'ULTRA SPARTAN 50K', desc:`Jour J à Morzine-Avoriaz. 50 km, 60 obstacles. Pars prudent, bois et mange tôt.`}
+/* Les événements intégrés (connus à l'avance). D'autres peuvent être ajoutés par la personne
+   (recherche avec Claude) et sont alors stockés dans S.customEvents. */
+const BUILTIN_EVENTS = {
+  'ultra-morzine-2027': {
+    id: 'ultra-morzine-2027',
+    name: 'Ultra Spartan Morzine-Avoriaz',
+    shortName: 'Ultra Morzine',
+    dateLabel: '2 juillet 2027',
+    finishLabel: 'Nyon · 2 juil.',
+    start: new Date(2026, 9, 5),   // lundi 5 octobre 2026
+    race:  new Date(2027, 6, 2),   // vendredi 2 juillet 2027
+    nw: 39,
+    phases: ['Base','Volume','Spécifique','Pic','Affûtage'],
+    phaseStart: [0,10,21,30,36],
+    recommendedDays: "Pour un ultra-trail avec obstacles comme celui-ci, compte au moins 4 jours par semaine à l'approche du pic de préparation (le nombre réel pourra démarrer plus bas et varier selon les semaines).",
+    description: 'Ultra-trail avec obstacles (OCR), 50 km, 60 obstacles, sommet à la pointe de Nyon (~2500 m).',
+    raceSession: {title:'ULTRA SPARTAN 50K', desc:`Jour J à Morzine-Avoriaz. 50 km, 60 obstacles. Pars prudent, bois et mange tôt.`}
+  }
 };
-const DAYS = ['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'];
+/* L'événement actif à l'écran — réassigné par setActiveEvent() avant chaque rendu.
+   Tout le reste du code lit EVENT.xxx librement, comme s'il n'y en avait qu'un. */
+let EVENT = BUILTIN_EVENTS['ultra-morzine-2027'];
+function eventDef(id) {
+  if (BUILTIN_EVENTS[id]) return BUILTIN_EVENTS[id];
+  const c = S.customEvents && S.customEvents[id];
+  if (!c) return null;
+  return {...c, start: new Date(c.start), race: new Date(c.race)};
+}
+function setActiveEvent(id) { const d = eventDef(id); if (d) EVENT = d; return d; }
 const KEY = 'ultra-morzine-v2';
 
 /* Liste de suggestions pour "quels sports pratiques-tu" — l'utilisateur peut aussi taper autre chose. */
@@ -146,16 +154,6 @@ const SPORTS_LIST = ['Course à pied','Trail','Triathlon','Duathlon','Natation',
   'Randonnée','Alpinisme','Golf','Aviron','Kayak / Canoë','Voile','Planche à voile','Surf','Plongée','Équitation','Danse',
   'Yoga','Pilates','Gymnastique','Escrime','Tir à l\'arc','Roller','Skateboard','Patinage','Hockey sur glace','Pétanque',
   'Cricket','Baseball','Water-polo','Parkour','Fitness / Aérobic'];
-/* Classe les sports tapés en grandes familles utiles pour adapter les séances de renfo. Correspondances simples par mot-clé. */
-function classifySports(list) {
-  const low = (list || []).map(s => s.toLowerCase());
-  const has = kws => low.some(s => kws.some(k => s.includes(k)));
-  return {
-    muscu: has(['musculation','crossfit','haltérophilie','powerlifting','force athlétique','fitness']),
-    grip: has(['escalade','grimpe','bloc']),
-    combat: has(['boxe','judo','karaté','karate','mma','lutte','taekwondo','jiu-jitsu','jjb','kickboxing','kick-boxing'])
-  };
-}
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -167,6 +165,14 @@ const dayDiff = (a, b) => Math.round((midnight(a) - midnight(b)) / 864e5);
 const weekOf = d => Math.max(0, Math.min(EVENT.nw-1, Math.floor(dayDiff(d, EVENT.start) / 7)));
 const phaseOf = i => { let p = 1; EVENT.phaseStart.forEach((s, k) => { if (i >= s) p = k + 1; }); return p; };
 const num = v => { const n = parseFloat(String(v).replace(',', '.')); return isNaN(n) ? 0 : n; };
+const mondayOfWeek = d => { d = new Date(d); const diff = (d.getDay() + 6) % 7; d.setDate(d.getDate() - diff); d.setHours(0,0,0,0); return d; };
+/* Répartit les 5 phases proportionnellement à la durée de la préparation, sur le même gabarit que Morzine. */
+function scalePhases(nw) {
+  const raw = [0,10,21,30,36].map(x => Math.round(x * nw / 39));
+  const ps = []; let last = -1;
+  raw.forEach(v => { v = Math.max(last + 1, Math.min(nw - 1, v)); ps.push(v); last = v; });
+  return ps;
+}
 const sportChipHtml = s => `<span class="chip soft sportchip" data-sport-chip="${esc(s)}">${esc(s)} <button type="button" data-act="rmSport" data-sport="${esc(s)}" aria-label="Retirer ${esc(s)}">×</button></span>`;
 function addSportValue(v) {
   v = (v || '').trim(); if (!v) return;
@@ -177,117 +183,69 @@ function addSportValue(v) {
   $('#sportChips').insertAdjacentHTML('beforeend', sportChipHtml(v));
 }
 
-/* ============ Générateur de plan ============ */
-function mk(type, ph, min, flags) {
-  flags = flags || {};
-  let title, desc, run = ['run','q','long','b2b'].includes(type);
-  const dp = r => Math.round(min * r / 50) * 50;
-  switch (type) {
-    case 'run':
-      title = 'Course facile';
-      desc = `Allure où tu peux parler. Marche autorisée.${ph >= 2 ? ' Terrain vallonné si possible.' : ''}`;
-      break;
-    case 'q':
-      if (ph === 1) { title = 'Course facile'; desc = 'Allure conversationnelle. Alterne course et marche si besoin.'; }
-      else if (ph === 2) { title = 'Côtes'; desc = `15 min d'échauffement facile, 6 à 8 × 1 min en montée soutenue (redescente en récupération), puis retour au calme.`; }
-      else if (ph === 3) { title = 'Côtes longues'; desc = `Échauffement, puis 4 à 6 × 3-4 min en montée (course ou marche rapide), récupération en descente.`; }
-      else if (ph === 4) { title = 'Allure course'; desc = `Blocs de 20-30 min à l'allure que tu tiendras le jour J, en terrain vallonné, avec ton sac.`; }
-      else { title = 'Allure course courte'; desc = `Échauffement, 3 × 8 min à allure course, retour au calme. Reste frais.`; }
-      break;
-    case 'long':
-      if (ph === 1) { title = 'Sortie longue facile'; desc = `Alterne course et marche (ex. 4 min / 1 min), allure très tranquille. Le but : durer.`; }
-      else if (ph === 2) { title = 'Sortie longue vallonnée'; desc = `Allure facile, terrain varié. Repère : environ ${dp(5)} m de D+.`; }
-      else if (ph === 3) { title = 'Sortie longue montagne'; desc = `Repère : environ ${dp(8)} m de D+. Teste ton sac, tes vêtements et ton ravitaillement.`; }
-      else if (ph === 4) { title = 'Grande sortie'; desc = `Répétition générale : environ ${dp(10)} m de D+, sac chargé, nutrition de course. Marche les pentes raides.`; }
-      else { title = 'Sortie facile'; desc = `Tranquille, pour garder les jambes. Repère : environ ${dp(4)} m de D+.`; }
-      break;
-    case 'b2b':
-      if (ph >= 3) { title = 'Enchaînement J+1'; desc = `Deuxième jour de fatigue : rando-course facile en montagne, sac chargé.`; }
-      else { title = 'Récup active'; desc = `Footing très facile ou marche active.`; }
-      break;
-    case 'str':
-      if (flags.muscu) { title = 'Renfo (ta séance habituelle)'; desc = `Tu pratiques déjà la musculation : garde ta séance habituelle, ajoute juste 2-3 exercices de grip (suspension, port de charge) pour préparer les obstacles.`; }
-      else if (ph === 1) { title = 'Street workout'; desc = `Tractions, dips, pompes, tractions australiennes + gainage. Garde 2 répétitions en réserve.`; }
-      else if (ph === 2) { title = 'Street workout + jambes'; desc = `Haut du corps allégé, puis fentes, squat bulgare, mollets. Les jambes préparent la montagne.`; }
-      else if (ph === 3) { title = 'Street workout (maintien)'; desc = `Volume réduit d'environ un tiers pour garder de la fraîcheur à la course. Gainage.`; }
-      else { title = 'Maintien léger'; desc = `Séance courte : quelques séries de tractions, pompes, gainage. Rien d'épuisant.`; }
-      break;
-    case 'str2':
-      if (flags.grip) { title = 'Renfo complémentaire'; desc = `L'escalade couvre déjà bien ton grip et ton équilibre : concentre-toi ici sur les portés de charge (sac de sable, bidon) et la corde.`; }
-      else if (flags.combat) { title = 'Renfo complémentaire'; desc = `Ton sport de combat couvre déjà l'explosivité et le cardio intense : ajoute ici du grip (suspensions, farmer carry) pour les obstacles.`; }
-      else if (ph === 1) { title = 'Kettlebell & mobilité'; desc = `Swing, goblet squat, mobilité hanches et chevilles.`; }
-      else if (ph === 2) { title = 'Renfo jambes & mobilité'; desc = `Kettlebell : squat, fentes, soulevé de terre roumain, puis mobilité.`; }
-      else if (ph === 3) { title = 'OCR spécifique'; desc = `Grip (suspensions, farmer carry), portés (sac de sable, seau), corde, barres de singe.`; }
-      else if (ph === 4) { title = 'OCR spécifique léger'; desc = `Grip et portés à charge modérée. Qualité avant quantité.`; }
-      else { title = 'Mobilité'; desc = `Mobilité et activation, 20-25 min.`; }
-      break;
-    case 'mob': title = 'Mobilité & activation'; desc = `20 min de mobilité, quelques accélérations douces.`; break;
-    case 'race': title = EVENT.raceSession.title; desc = EVENT.raceSession.desc; break;
-  }
-  return {title, desc, run};
-}
-
-function buildPlan(P, ov, flags) {
-  ov = ov || {}; flags = flags || {};
+/* ============ Assemblage du plan ============
+   Le contenu (quelles séances, quel volume, quelle progression) n'est plus calculé
+   par une formule : il est écrit par Claude à partir du profil complet de la personne
+   (voir planPrompt() et l'action "importPlan"), et stocké tel quel dans ev().plan.
+   Cette fonction se contente d'assembler : calendrier (dates, phases), semaines "avant
+   le départ", semaine de course (fixe), et l'allègement -20% quand il est actif. */
+function assemblePlan(aiWeeks, overrides, startIdx) {
+  aiWeeks = aiWeeks || {}; overrides = overrides || {};
   const weeks = [];
   for (let i = 0; i < EVENT.nw; i++) {
     const ph = phaseOf(i), start = addDays(EVENT.start, i * 7);
-    const before = i < P.startIdx;
-    let T = 0, rec = false;
-    if (!before) {
-      if (i <= EVENT.peakW) {
-        const span = Math.max(1, EVENT.peakW - P.startIdx);
-        T = P.startMin * Math.pow(P.peakMin / P.startMin, (i - P.startIdx) / span);
-        if ((i - P.startIdx) % 4 === 3 && i < EVENT.peakW) { T *= .75; rec = true; }
-      } else if (i === EVENT.peakW + 1) T = P.peakMin * .7;
-      else if (i === EVENT.peakW + 2) T = P.peakMin * .5;
-    }
-    let light = false;
-    if (ov[i]) { T *= ov[i]; light = true; }
-    let sessions = [];
+    const before = i < startIdx;
+    let rec = false, light = false, sessions = [];
     if (!before) {
       if (i === EVENT.nw - 1) {
-        sessions = [['Mar','run',25],['Mer','mob',20],['Ven','race',0]].map(([d,t,m]) => ({...mk(t,5,m,flags), id:i+'-'+d, day:d, type:t, min:m}));
-        sessions[0].run = true;
+        sessions = [
+          {day:'Mar', type:'course', title:'Course facile', desc:'Allure où tu peux parler, reste frais pour le jour J.', min:25, run:true},
+          {day:'Mer', type:'mobilite', title:'Mobilité & activation', desc:'20 min de mobilité, quelques accélérations douces.', min:20, run:false},
+          {day:'Ven', type:'course', title:EVENT.raceSession.title, desc:EVENT.raceSession.desc, min:0, run:false}
+        ].map(s => ({...s, id:i+'-'+s.day}));
       } else {
-        const lay = EVENT.layout[P.days] || EVENT.layout[4];
-        const W = {long:.45, q:.25, run:.2, b2b:.12};
-        const sum = lay.reduce((a, [d, t]) => a + (W[t] || 0), 0);
-        sessions = lay.map(([d, t]) => {
-          let min;
-          if (W[t]) {
-            min = T * W[t] / sum;
-            if (t === 'long') min = Math.min(min, EVENT.caps[ph]);
-            min = Math.max(15, Math.round(min / 5) * 5);
-          } else min = ph >= 4 ? 30 : 45;
-          return {...mk(t, ph, min, flags), id:i+'-'+d, day:d, type:t, min};
-        });
+        const w = aiWeeks[i] || {sessions:[]};
+        rec = !!w.rec;
+        sessions = (w.sessions || []).map(s => ({...s, id:i+'-'+s.day}));
+        if (overrides[i]) {
+          light = true;
+          sessions = sessions.map(s => s.run ? {...s, min:Math.max(10, Math.round(s.min * overrides[i] / 5) * 5)} : s);
+        }
       }
     }
-    const target = sessions.filter(s => s.run).reduce((a, s) => a + s.min, 0);
+    const target = sessions.filter(s => s.run).reduce((a, s) => a + (s.min || 0), 0);
     weeks.push({i, ph, start, end:addDays(start, 6), before, rec, light, sessions, target});
   }
   return weeks;
 }
 
-function paramsFrom(days, assess, startIdx) {
-  const startMin = Math.max(60, Math.min(240, Math.round(Math.max(assess.weeklyKm * 7, assess.longest * 2.3) / 5) * 5));
-  const peakMin = startMin >= 150 ? 540 : startMin >= 100 ? 500 : 450;
-  return {days, startMin, peakMin, startIdx};
-}
-
 /* ============ État & stockage ============ */
-let S = {v:2, profile:null, events:{}, share:true, updated:0};
+let S = {v:2, profile:null, events:{}, customEvents:{}, viewEventId:null, share:true, updated:0};
 let PLAN = [], tab = 'sem', cur = weekOf(new Date()), vw = cur, openId = null;
 let GROUP = [], gOpen = null, gWeek = cur, groupSub = null, lastSum = '';
 
 // Progression sur l'événement courant (séances faites, semaines allégées...).
 // Séparée du profil sportif : un même profil pourra un jour suivre plusieurs événements.
-function ev() {
+// ev() ne crée rien : son absence veut dire "pas encore choisi cet objectif" (tableau de bord vide).
+function ev() { return S.events[EVENT.id]; }
+function ensureEvent() {
   if (!S.events[EVENT.id]) S.events[EVENT.id] = {startIdx: Math.min(33, weekOf(new Date())), overrides:{}, log:{}};
   return S.events[EVENT.id];
 }
-function rebuild() { PLAN = (S.profile && ev().assess) ? buildPlan(paramsFrom(S.profile.days, ev().assess, ev().startIdx), ev().overrides, classifySports(S.profile.sports)) : []; }
+function rebuild() { const E = ev(); PLAN = (S.profile && E && E.plan) ? assemblePlan(E.plan, E.overrides, E.startIdx) : []; }
+/* Choisit quelle course regarder (par défaut la première commencée) et rend EVENT actif en conséquence.
+   À appeler avant rebuild()/ev() dès que S a pu changer de course en dehors du flux normal de clic. */
+function syncActiveEvent() {
+  const prevId = EVENT && EVENT.id;
+  if (!S.viewEventId || !S.events[S.viewEventId]) {
+    const ids = Object.keys(S.events);
+    if (ids.length) S.viewEventId = ids[0];
+  }
+  if (S.viewEventId) setActiveEvent(S.viewEventId);
+  // Chaque course a son propre calendrier : "la semaine actuelle" ne veut dire la même chose que dans la course qu'on regarde.
+  if (EVENT && EVENT.id !== prevId) { cur = weekOf(new Date()); vw = cur; }
+  return !!(S.viewEventId && S.events[S.viewEventId]);
+}
 
 const Store = {
   ok:false, uid:null, db:null, canWrite:true,
@@ -319,8 +277,15 @@ async function flush() {
   saving = true; dirty = false;
   try {
     await Store.saveMine(S);
-    if (Store.canWrite && S.profile) {
+    // Le groupe ne suit que l'Ultra Morzine (l'objectif commun) : on partage toujours celle-ci,
+    // quelle que soit la course affichée à l'écran — une seule doc Firestore par personne.
+    const morzineId = 'ultra-morzine-2027';
+    if (Store.canWrite && S.profile && S.events[morzineId] && S.events[morzineId].plan) {
+      const keepEvent = EVENT, keepPlan = PLAN;
+      setActiveEvent(morzineId);
+      PLAN = assemblePlan(ev().plan, ev().overrides, ev().startIdx);
       const sum = S.share ? summary() : null;
+      EVENT = keepEvent; PLAN = keepPlan;
       const str = sum ? JSON.stringify({...sum, upd:0}) : 'off';
       if (str !== lastSum) { await Store.publish(sum); lastSum = str; }
     }
@@ -329,7 +294,7 @@ async function flush() {
 }
 
 function summary() {
-  const E = ev(), P = paramsFrom(S.profile.days, E.assess, E.startIdx), weeks = {}, ses = {};
+  const E = ev(), weeks = {}, ses = {};
   PLAN.forEach(w => {
     let m = 0, k = 0, d = 0, n = 0;
     w.sessions.forEach(s => {
@@ -342,7 +307,10 @@ function summary() {
     });
     if (n) weeks[w.i] = {m, k:Math.round(k * 10) / 10, d, n, t:w.sessions.length};
   });
-  return {name:S.profile.name, fullName:S.profile.fullName || '', p:P, o:E.overrides, weeks, ses, upd:Date.now()};
+  // Plan déjà assemblé (allègements compris) partagé tel quel : pas de formule à rejouer côté amis.
+  const plan = PLAN.map(w => ({i:w.i, ph:w.ph, rec:w.rec, light:w.light, before:w.before, target:w.target,
+    sessions: w.sessions.map(s => ({id:s.id, day:s.day, title:s.title, min:s.min, run:s.run}))}));
+  return {name:S.profile.name, fullName:S.profile.fullName || '', plan, weeks, ses, upd:Date.now()};
 }
 
 /* ============ Calculs ============ */
@@ -414,11 +382,58 @@ function head() {
   const left = Math.max(0, dayDiff(EVENT.race, new Date()));
   return `<div class="top"><div><h1>${esc(EVENT.shortName)}</h1><div class="sub">${esc(S.profile.name)} · ${EVENT.dateLabel}</div></div><div class="count">J-${left}<small>avant le départ</small></div></div>`;
 }
+function dashHead() {
+  return `<div class="top"><div><h1>${esc(S.profile.name)}</h1><div class="sub">Choisis ton objectif pour commencer</div></div></div>`;
+}
+/* Petite barre pour passer d'une course déjà commencée à une autre, visible dès qu'il y en a au moins une. */
+function eventSwitcherRow() {
+  const ids = Object.keys(S.events);
+  if (!ids.length) return '';
+  let h = '<div class="row" style="margin:12px 0 0">';
+  ids.forEach(id => {
+    const d = eventDef(id); if (!d) return;
+    h += `<button class="btn ${id === S.viewEventId ? '' : 'alt'}" style="padding:8px 12px;font-size:13px;min-height:36px" data-act="switchEvent" data-id="${esc(id)}">${esc(d.shortName || d.name)}</button>`;
+  });
+  h += `<button class="btn alt" style="padding:8px 12px;font-size:13px;min-height:36px" data-act="addEvent">+ Course</button></div>`;
+  return h;
+}
+function eventsDashboard() {
+  const started = !!S.events['ultra-morzine-2027'];
+  let h = '';
+  if (!started) h += `<div class="card" style="text-align:center;padding:28px 16px">
+    <h3 style="margin-bottom:6px">Prêt à viser un objectif ?</h3>
+    <p class="note" style="margin:0 0 16px">Commence par la course déjà connue par l'app, ou cherche une autre course.</p>
+    <button class="btn" data-act="pickEvent" data-id="ultra-morzine-2027">${esc(BUILTIN_EVENTS['ultra-morzine-2027'].name)} · ${BUILTIN_EVENTS['ultra-morzine-2027'].dateLabel}</button>
+  </div>`;
+  h += `<div class="card" style="text-align:center;padding:28px 16px">
+    <h3 style="margin-bottom:6px">Une autre course ?</h3>
+    <p class="note" style="margin:0 0 16px">Tape son nom, je cherche ses infos officielles sur internet avec toi.</p>
+    <button class="btn alt" data-act="addEvent">+ Ajouter une course</button>
+  </div>`;
+  return h;
+}
+function eventLookupPrompt(name) {
+  return `Cherche sur internet les informations officielles de cette course : "${name}".
+Réponds UNIQUEMENT avec un objet JSON (sans texte autour), dans ce format exact :
+{"name": "Nom complet officiel", "raceDate": "AAAA-MM-JJ", "distanceKm": 42.2, "elevationM": 500, "location": "Ville, pays", "description": "Une phrase décrivant le type d'épreuve (terrain, difficulté, format) pour construire un plan d'entraînement adapté."}
+Si tu ne trouves pas une information fiable, mets null pour ce champ plutôt que d'inventer une valeur. Si tu ne trouves pas du tout cette course, réponds {"error": "course introuvable"}.`;
+}
+function eventSearchForm() {
+  return `<div class="top"><div><h1>Ajouter une course</h1><div class="sub">Je cherche ses infos avec toi</div></div></div>
+  <div class="card">
+    <div class="fld"><label for="f-evt-name">Nom de la course (le plus précis possible)</label><input id="f-evt-name" placeholder="ex. Marathon de Paris 2027" autocomplete="off"></div>
+    <div class="row"><button class="btn" data-act="copyEventSearch">1. Copier la recherche pour Claude</button></div>
+    <p class="note" style="margin:0 0 8px">Colle ce texte dans une conversation avec Claude (claude.ai ou l'app Claude) : il cherche vraiment sur internet. Colle ensuite sa réponse ci-dessous.</p>
+    <textarea id="f-evt-json" placeholder="Colle ici la réponse de Claude (le bloc JSON)" style="min-height:120px;font-size:13px"></textarea>
+    <p class="note" id="evtMsg" style="color:var(--warn);margin:4px 0 0"></p>
+    <div class="row"><button class="btn" data-act="createEvent">2. Créer la course</button><button class="btn alt" data-act="tab" data-v="moi">Annuler</button></div>
+  </div>`;
+}
 
 /* ---- Étape 1 : profil sportif générique (indépendant de toute course) ---- */
 function onboardProfile(editing) {
-  const p = S.profile || {name:'', fullName:'', ageRange:'25-34', activityLevel:'leger', sports:[], pastEndurance:'jamais', injuryAreas:[], limits:'',
-    days:5, sessionDuration:'', constraints:''};
+  const p = S.profile || {name:'', fullName:'', ageRange:'25-34', activityLevel:'leger', sports:[], injuryAreas:[], limits:'',
+    sessionDuration:'', constraints:''};
   const opt = (arr, v) => arr.map(([val, t]) => `<option value="${val}" ${val == v ? 'selected' : ''}>${t}</option>`).join('');
   const chk = (attr, val, label, checked) => `<label class="chkrow"><input type="checkbox" value="${val}" ${attr}="1" ${checked ? 'checked' : ''}> ${label}</label>`;
   const inj = (val, label) => chk('data-inj', val, label, p.injuryAreas.includes(val));
@@ -441,11 +456,6 @@ function onboardProfile(editing) {
       <div id="sportChips" class="row" style="margin:0">${p.sports.map(sportChipHtml).join('')}</div>
       <input type="hidden" id="f-sports-json" value='${esc(JSON.stringify(p.sports))}'>
     </div>
-  </div>
-
-  <div class="card">
-    <h3 style="font-size:17px;margin-bottom:8px">Ton passé sportif</h3>
-    <div class="fld"><label for="f-past">Déjà fait une course d'endurance ou un objectif similaire ?</label><select id="f-past">${opt([['jamais',"Jamais"],['parfois',"1 à 2 fois"],['souvent',"Régulièrement"]], p.pastEndurance)}</select></div>
     <details class="disc" ${hasInjuryInfo ? 'open' : ''}>
       <summary>Blessures passées ou actuelles à surveiller <span class="priv">· privé, jamais partagé</span></summary>
       <div class="discbody">
@@ -457,7 +467,6 @@ function onboardProfile(editing) {
 
   <div class="card">
     <h3 style="font-size:17px;margin-bottom:8px">Ta disponibilité</h3>
-    <div class="fld"><label for="f-days">Jours d'entraînement par semaine</label><select id="f-days">${opt([[3,"3 jours"],[4,"4 jours"],[5,"5 jours"],[6,"6 jours"]], p.days)}</select></div>
     <div class="fld"><label for="f-dur">Temps disponible par séance (optionnel)</label><select id="f-dur">${opt([['',"Pas de préférence"],[30,"Environ 30 min"],[45,"Environ 45 min"],[60,"Environ 1h"],[90,"1h30 ou plus"]], p.sessionDuration)}</select></div>
     <div class="fld"><label for="f-constraints">Contraintes (salle dispo, extérieur seulement, matériel...) — optionnel</label><textarea id="f-constraints">${esc(p.constraints || '')}</textarea></div>
   </div>
@@ -467,23 +476,83 @@ function onboardProfile(editing) {
 
 /* ---- Étape 2 : questionnaire spécifique à la course choisie ---- */
 function onboardEvent(editing) {
-  const a = (S.profile && ev().assess) || {longest:20, weeklyKm:10, enduranceLevel:'correct', upperBodyLevel:'correct', legsLevel:'correct', gripLevel:'correct'};
+  const a = (S.profile && ev() && ev().assess) || {pastEndurance:'jamais', longest:20, weeklyKm:10, enduranceLevel:'correct', upperBodyLevel:'correct', legsLevel:'correct', gripLevel:'correct', maxDays:4};
   const opt = (arr, v) => arr.map(([val, t]) => `<option value="${val}" ${val == v ? 'selected' : ''}>${t}</option>`).join('');
   const lvl = (id, v) => `<select id="${id}">${opt([['faible','Faible'],['correct','Correct'],['bon','Bon']], v)}</select>`;
   return `<div class="top"><div><h1>${editing ? 'Mon évaluation' : 'Dernière étape'}</h1><div class="sub">${esc(EVENT.name)} · ${EVENT.dateLabel}</div></div></div>
-  <p class="note">Des questions plus précises, propres à ce type d'épreuve (trail + obstacles) : cardio et condition physique. Un marathon ou un triathlon poserait d'autres questions ici.</p>
+  <p class="note">Des questions plus précises, propres à cette épreuve : cardio et condition physique.${EVENT.description ? ' ' + esc(EVENT.description) : ''}</p>
 
   <div class="card">
+    <div class="fld"><label for="f-past">Déjà fait une course d'endurance ou un objectif similaire ?</label><select id="f-past">${opt([['jamais',"Jamais"],['parfois',"1 à 2 fois"],['souvent',"Régulièrement"]], a.pastEndurance)}</select></div>
     <div class="fld"><label for="f-longest">Aujourd'hui, la plus longue durée que tu peux courir sans t'arrêter</label><select id="f-longest">${opt([[5,"Moins de 10 min"],[10,"10 à 20 min"],[20,"20 à 30 min"],[30,"30 à 45 min"],[45,"45 à 60 min"],[60,"Plus d'une heure"]], a.longest)}</select></div>
     <div class="fld"><label for="f-km">Kilomètres courus par semaine aujourd'hui</label><select id="f-km">${opt([[0,"Aucun"],[5,"Environ 5 km"],[10,"Environ 10 km"],[15,"Environ 15 km"],[20,"Environ 20 km"],[30,"30 km ou plus"]], a.weeklyKm)}</select></div>
     <div class="fld"><label for="f-end">Endurance / cardio (ressenti)</label>${lvl('f-end', a.enduranceLevel)}</div>
     <div class="fld"><label for="f-up">Force haut du corps (tractions, pompes)</label>${lvl('f-up', a.upperBodyLevel)}</div>
     <div class="fld"><label for="f-legs">Force jambes</label>${lvl('f-legs', a.legsLevel)}</div>
     <div class="fld"><label for="f-grip">Grip / équilibre / escalade</label>${lvl('f-grip', a.gripLevel)}</div>
+    <div class="fld"><label for="f-maxdays">Combien de jours par semaine peux-tu consacrer AU MAXIMUM à l'entraînement ?</label><select id="f-maxdays">${opt([[2,"2 jours"],[3,"3 jours"],[4,"4 jours"],[5,"5 jours"],[6,"6 jours"],[7,"7 jours"]], a.maxDays)}</select>
+      <p class="note" style="margin:4px 0 0">${EVENT.recommendedDays} Le nombre réel de séances pourra varier d'une semaine à l'autre — ce n'est pas un chiffre figé.</p>
+    </div>
   </div>
 
-  <p class="note">Cette app donne un cadre général d'entraînement, pas un avis médical. Si tu as une pathologie, une douleur qui persiste ou un doute, consulte un médecin avant de te lancer sur 50 km.</p>
-  <div class="row"><button class="btn" data-act="saveEvent">${editing ? 'Enregistrer' : 'Générer mon plan'}</button>${editing ? '<button class="btn alt" data-act="tab" data-v="moi">Annuler</button>' : '<button class="btn alt" data-act="editProfile">‹ Modifier mon profil</button>'}</div>`;
+  <p class="note">Cette app donne un cadre général d'entraînement, pas un avis médical. Si tu as une pathologie, une douleur qui persiste ou un doute, consulte un médecin avant de commencer cette préparation.</p>
+  <div class="row"><button class="btn" data-act="saveEvent">${editing ? 'Enregistrer' : 'Continuer'}</button>${editing ? '<button class="btn alt" data-act="tab" data-v="moi">Annuler</button>' : '<button class="btn alt" data-act="editProfile">‹ Modifier mon profil</button>'}</div>`;
+}
+
+/* ---- Étape 3 : génération du plan par Claude (pas de formule, un vrai raisonnement sur le profil complet) ---- */
+function planPrompt() {
+  const p = S.profile, a = ev().assess, startIdx = ev().startIdx;
+  const injTxt = p.injuryAreas.length ? p.injuryAreas.join(', ') + (p.limits ? ' — ' + p.limits : '') : (p.limits || 'aucune connue');
+  const sportsTxt = p.sports.length ? p.sports.join(', ') : 'aucun autre sport pratiqué actuellement';
+  const phasesTxt = EVENT.phases.map((ph, k) => `- ${ph} : semaines ${EVENT.phaseStart[k] + 1} à ${EVENT.phaseStart[k + 1] || EVENT.nw}`).join('\n');
+  return `Tu es coach sportif. Prépare un plan d'entraînement détaillé, semaine par semaine, pour cette course :
+
+ÉVÉNEMENT : ${EVENT.name}, le ${EVENT.dateLabel}. ${EVENT.description || ''}
+
+CALENDRIER FIXE (ces dates ne changent pas) :
+${phasesTxt}
+La semaine ${EVENT.nw} est la semaine de course, je la gère déjà séparément — génère uniquement le contenu des semaines ${startIdx + 1} à ${EVENT.nw - 1}.
+
+PROFIL DE LA PERSONNE :
+- Âge : ${p.ageRange} · Niveau d'activité actuel : ${p.activityLevel}
+- Sports pratiqués actuellement : ${sportsTxt}
+- Expérience de courses d'endurance : ${a.pastEndurance}
+- Blessures / limites à prendre en compte (reste privé, ne jamais partager avec d'autres) : ${injTxt}
+- Aujourd'hui, plus longue durée de course sans s'arrêter : ${a.longest} min
+- Km courus par semaine actuellement : ${a.weeklyKm} km
+- Endurance/cardio ressenti : ${a.enduranceLevel} · Force haut du corps : ${a.upperBodyLevel} · Force jambes : ${a.legsLevel} · Grip/équilibre/escalade : ${a.gripLevel}
+- Jours d'entraînement disponibles par semaine : ${a.maxDays} MAXIMUM — ce n'est pas un nombre fixe, adapte le nombre réel de séances selon la phase et la charge (par exemple moins en début de préparation ou en semaine allégée, jusqu'à ce maximum au pic).
+- Temps disponible par séance : ${p.sessionDuration ? p.sessionDuration + ' min' : 'pas de préférence précisée'}
+- Contraintes : ${p.constraints || 'aucune précisée'}
+
+CE QUE J'ATTENDS :
+- Une vraie progression personnalisée, pas un programme générique : si la personne est sédentaire ou débutante, démarre doucement et progresse prudemment (pas de saut brutal de volume). Si une pratique actuelle couvre déjà une partie de la préparation (ex. musculation, escalade, vélo), n'en rajoute pas une version redondante par-dessus — adapte ou remplace.
+- Jamais plus de ${a.maxDays} séances sur une même semaine, sur des jours différents (Lun/Mar/Mer/Jeu/Ven/Sam/Dim). RÈGLE STRICTE sur la fréquence, pas seulement la durée : la semaine 1 doit démarrer à AU MOINS 2 séances de moins que ${a.maxDays} (minimum 3 séances au tout début, jamais le maximum direct dès le départ, même si la personne se dit "sportif confirmé"). Ajoute une séance supplémentaire progressivement au fil des semaines, et n'atteins ${a.maxDays} séances que plus tard dans la préparation (pas avant le milieu de la phase Volume, sauf si ${a.maxDays} est déjà bas, 3 ou moins). La fréquence est une vraie variable de progression, au même titre que la durée — ne te contente jamais d'augmenter seulement la durée des séances à nombre de séances fixe.
+- Marque les semaines de récupération/allégées que tu juges utiles ("rec": true).
+- Séances de course réalistes et progressives ; séances de renfo avec des exercices concrets adaptés au niveau réel de la personne, pas un texte générique.
+
+RÉPONDS UNIQUEMENT avec un bloc de code JSON, un objet par semaine, dans ce format exact :
+[
+  {"i": ${startIdx}, "rec": false, "sessions": [
+    {"day": "Mar", "type": "course", "title": "Sortie facile", "desc": "Description concrète de la séance", "min": 30, "run": true},
+    {"day": "Jeu", "type": "renfo", "title": "...", "desc": "...", "min": 25, "run": false}
+  ]},
+  ...
+]
+("i" = numéro de semaine en partant de 0, de ${startIdx} à ${EVENT.nw - 2} inclus. "run": true seulement pour les séances qui comptent dans le volume de course hebdomadaire.)`;
+}
+
+function genPlanView() {
+  const canCancel = !!(ev() && ev().plan);
+  return `<div class="top"><div><h1>Ton plan</h1><div class="sub">${esc(EVENT.name)} · ${EVENT.dateLabel}</div></div></div>
+  <div class="card">
+    <p class="note" style="margin:0 0 8px">Dernière étape : je ne fabrique pas ton plan avec une formule toute faite — c'est Claude qui l'écrit vraiment, à partir de ton profil complet.</p>
+    <div class="row"><button class="btn" data-act="copyPrompt">1. Copier mes informations pour Claude</button></div>
+    <p class="note" style="margin:0 0 8px">Colle ce texte dans une conversation avec Claude (claude.ai ou l'app Claude), laisse-le te faire ton plan, puis colle sa réponse ci-dessous.</p>
+    <textarea id="f-plan-json" placeholder="Colle ici la réponse de Claude (le bloc de code JSON)" style="min-height:160px;font-size:13px"></textarea>
+    <p class="note" id="planImportMsg" style="color:var(--warn);margin:4px 0 0"></p>
+    <div class="row"><button class="btn" data-act="importPlan">2. Importer mon plan</button>${canCancel ? '<button class="btn alt" data-act="tab" data-v="moi">Annuler</button>' : ''}</div>
+  </div>`;
 }
 
 function semView() {
@@ -535,7 +604,7 @@ function planView() {
 }
 
 function athStats(d) {
-  const pl = buildPlan(d.p, d.o || {}), done = {}; let tot = 0;
+  const pl = d.plan || [], done = {}; let tot = 0;
   Object.entries(d.weeks || {}).forEach(([i, w]) => { done[i] = w.m; tot += w.m; });
   return {pl, done, tot};
 }
@@ -546,7 +615,7 @@ function grpView() {
   if (!S.share) h += `<div class="card note">Tu ne partages pas tes données. Active le partage dans l'onglet Moi pour apparaître ici.</div>`;
   if (!GROUP.length) return h + `<div class="card note">Personne n'a encore partagé son plan.</div>`;
   GROUP.slice().sort((a, b) => (a.data.name || '').localeCompare(b.data.name || '')).forEach(g => {
-    const d = g.data; if (!d.p) return;
+    const d = g.data; if (!d.plan || !d.plan.length) return;
     const a = athStats(d), me = g.id === Store.uid, wk = (d.weeks || {})[cur] || {m:0, n:0, t:0};
     const pw = a.pl[cur], open = gOpen === g.id;
     h += `<div class="card ath"><h3>${esc(d.name || 'Anonyme')}${me ? ' <span class="chip soft">toi</span>' : ''}</h3>
@@ -571,24 +640,42 @@ function grpView() {
 
 function moiView() {
   const P = S.profile, E = ev();
+  const profileCard = (E && E.plan)
+    ? `<div class="card"><b>${esc(P.name)}</b>${P.fullName ? ` <span class="note">${esc(P.fullName)}</span>` : ''}<p class="note" style="margin:4px 0 0">${E.assess.maxDays} jours max par semaine · départ du plan : semaine ${E.startIdx + 1}</p>
+      <p class="note" style="margin:8px 0 0">Série en cours : ${streak()} semaine${streak() > 1 ? 's' : ''} à 75 % de séances faites ou plus.</p>
+      <div class="row"><button class="btn alt" data-act="editProfile">Modifier mon profil</button><button class="btn alt" data-act="editEvent">Modifier mon évaluation ${esc(EVENT.shortName)}</button><button class="btn alt" data-act="genPlan">Régénérer mon plan avec Claude</button></div></div>`
+    : `<div class="card"><b>${esc(P.name)}</b>${P.fullName ? ` <span class="note">${esc(P.fullName)}</span>` : ''}<p class="note" style="margin:8px 0 0">Tu n'as pas encore choisi d'objectif.</p>
+      <div class="row"><button class="btn alt" data-act="editProfile">Modifier mon profil</button></div></div>
+      ${eventsDashboard()}`;
   return `<div class="top" style="padding-bottom:0"><div><h1>Moi</h1></div></div>
-  <div class="card"><b>${esc(P.name)}</b>${P.fullName ? ` <span class="note">${esc(P.fullName)}</span>` : ''}<p class="note" style="margin:4px 0 0">${P.days} jours par semaine · départ du plan : semaine ${E.startIdx + 1} · base de ${hm(paramsFrom(P.days, E.assess, E.startIdx).startMin)} de course par semaine</p>
-  <p class="note" style="margin:8px 0 0">Série en cours : ${streak()} semaine${streak() > 1 ? 's' : ''} à 75 % de séances faites ou plus.</p>
-  <div class="row"><button class="btn alt" data-act="editProfile">Modifier mon profil</button><button class="btn alt" data-act="editEvent">Modifier mon évaluation ${esc(EVENT.shortName)}</button></div></div>
-  <div class="card"><b>Partage avec le groupe</b><p class="note" style="margin:4px 0 8px">Le groupe voit ton pseudo (et ton nom complet si tu l'as renseigné), ton plan, tes séances faites, durées, km et D+. Jamais tes douleurs, fatigue, notes ni limites.</p>
+  ${profileCard}
+  <div class="card"><b>Partage avec le groupe</b><p class="note" style="margin:4px 0 8px">Le groupe de l'Ultra Morzine voit ton pseudo (et ton nom complet si tu l'as renseigné), ton plan Morzine, tes séances faites, durées, km et D+ — tes autres courses restent privées. Jamais tes douleurs, fatigue, notes ni limites.</p>
   <div class="row"><button class="btn ${S.share ? '' : 'alt'}" data-act="share">${S.share ? 'Partage activé · désactiver' : 'Partage désactivé · activer'}</button></div></div>
   <div class="card"><b>Sauvegarde</b><p class="note" style="margin:4px 0 8px">Copie tes données pour les conserver ou les restaurer.</p>
-  <div class="row"><button class="btn alt" data-act="export">Exporter</button><button class="btn alt" data-act="import">Importer</button></div></div>`;
+  <div class="row"><button class="btn alt" data-act="export">Exporter</button><button class="btn alt" data-act="import">Importer</button></div></div>
+  <div class="card"><b>Recommencer</b><p class="note" style="margin:4px 0 8px">Efface tout (profil, course choisie, séances) pour repartir de zéro sur cet appareil.</p>
+  <div class="row"><button class="btn alt" data-act="reset" style="color:var(--warn);border-color:var(--warn)">Réinitialiser</button></div></div>`;
 }
 
 function render() {
   const y = window.scrollY, app = $('#app'), nav = $('#nav');
   if (!S.profile) { app.innerHTML = onboardProfile(false); nav.hidden = true; return; }
   if (tab === 'editProfile') { app.innerHTML = onboardProfile(true); nav.hidden = true; return; }
-  if (!ev().assess) { app.innerHTML = onboardEvent(false); nav.hidden = true; return; }
-  if (tab === 'editEvent') { app.innerHTML = onboardEvent(true); nav.hidden = true; return; }
-  const v = tab === 'sem' ? semView() : tab === 'plan' ? planView() : tab === 'grp' ? grpView() : moiView();
-  app.innerHTML = head() + v;
+
+  const chosen = syncActiveEvent();
+
+  if (tab === 'addEvent') { app.innerHTML = eventSearchForm(); nav.hidden = true; return; }
+  if (tab === 'editEvent' && chosen) { app.innerHTML = onboardEvent(true); nav.hidden = true; return; }
+  if (chosen && !ev().assess) { app.innerHTML = onboardEvent(false); nav.hidden = true; return; }
+  if ((tab === 'genPlan' && chosen) || (chosen && !ev().plan)) { app.innerHTML = genPlanView(); nav.hidden = true; return; }
+
+  const ready = chosen && ev() && ev().plan;
+  let v;
+  if (tab === 'sem') v = ready ? semView() : eventsDashboard();
+  else if (tab === 'plan') v = ready ? planView() : eventsDashboard();
+  else if (tab === 'grp') v = grpView();
+  else v = moiView();
+  app.innerHTML = eventSwitcherRow() + (ready ? head() : dashHead()) + v;
   nav.hidden = false;
   nav.innerHTML = [['sem','Semaine'],['plan','Plan'],['grp','Groupe'],['moi','Moi']].map(([k, t]) => `<button data-act="tab" data-v="${k}" class="${tab === k ? 'on' : ''}">${t}</button>`).join('');
   window.scrollTo(0, y);
@@ -636,8 +723,8 @@ document.addEventListener('click', async e => {
     try {
       const d = JSON.parse($('#mtxt').value);
       if (!d || !d.profile || !d.profile.name) throw 0;
-      S = {v:2, profile:d.profile, events:d.events || {}, share:d.share !== false, updated:0};
-      rebuild(); persist(); $('#modal').innerHTML = ''; tab = 'sem'; render();
+      S = {v:2, profile:d.profile, events:d.events || {}, customEvents:d.customEvents || {}, viewEventId:d.viewEventId || null, share:d.share !== false, updated:0};
+      syncActiveEvent(); rebuild(); persist(); $('#modal').innerHTML = ''; tab = 'sem'; render();
     } catch (er) { $('#mmsg').textContent = 'Données invalides.'; }
     return;
   }
@@ -648,19 +735,57 @@ document.addEventListener('click', async e => {
     let sports = []; try { sports = JSON.parse($('#f-sports-json').value || '[]'); } catch (e) {}
     const p = {
       name, fullName:$('#f-fullname').value.trim(), ageRange:$('#f-age').value, activityLevel:$('#f-activity').value, sports,
-      pastEndurance:$('#f-past').value,
       injuryAreas, limits:$('#f-limits').value,
-      days:+$('#f-days').value, sessionDuration:$('#f-dur').value, constraints:$('#f-constraints').value
+      sessionDuration:$('#f-dur').value, constraints:$('#f-constraints').value
     };
     S.profile = p; rebuild(); persist(); tab = 'sem'; render(); return;
   }
   if (a === 'saveEvent') {
-    const E = ev();
+    const E = ensureEvent();
     E.assess = {
-      longest:+$('#f-longest').value, weeklyKm:+$('#f-km').value,
-      enduranceLevel:$('#f-end').value, upperBodyLevel:$('#f-up').value, legsLevel:$('#f-legs').value, gripLevel:$('#f-grip').value
+      pastEndurance:$('#f-past').value, longest:+$('#f-longest').value, weeklyKm:+$('#f-km').value,
+      enduranceLevel:$('#f-end').value, upperBodyLevel:$('#f-up').value, legsLevel:$('#f-legs').value, gripLevel:$('#f-grip').value,
+      maxDays:+$('#f-maxdays').value
     };
     rebuild(); persist(); tab = 'sem'; vw = Math.max(cur, E.startIdx); render(); return;
+  }
+  if (a === 'pickEvent') {
+    const id = b.dataset.id; if (!setActiveEvent(id)) return;
+    ensureEvent(); S.viewEventId = id; cur = weekOf(new Date()); vw = cur;
+    persist(); tab = 'sem'; render(); return;
+  }
+  if (a === 'switchEvent') { S.viewEventId = b.dataset.id; persist(); tab = 'sem'; render(); return; }
+  if (a === 'addEvent') { tab = 'addEvent'; render(); return; }
+  if (a === 'copyEventSearch') {
+    const name = $('#f-evt-name').value.trim();
+    if (!name) { $('#f-evt-name').focus(); return; }
+    showModal('Recherche pour Claude', eventLookupPrompt(name), false); return;
+  }
+  if (a === 'createEvent') {
+    const msg = $('#evtMsg');
+    try {
+      const d = JSON.parse($('#f-evt-json').value);
+      if (d.error || !d.name || !d.raceDate) throw 0;
+      const race = new Date(d.raceDate);
+      if (isNaN(race.getTime())) throw 0;
+      const start = mondayOfWeek(new Date());
+      const nw = Math.max(4, Math.min(120, Math.round(dayDiff(race, start) / 7) + 1));
+      const id = 'evt-' + Date.now().toString(36);
+      const dateLabel = race.toLocaleDateString('fr-FR', {day:'numeric', month:'long', year:'numeric'});
+      const shortName = d.name.length > 22 ? d.name.slice(0, 20) + '…' : d.name;
+      S.customEvents[id] = {
+        id, name: d.name, shortName, dateLabel,
+        finishLabel: 'Arrivée · ' + fd(race),
+        start: start.toISOString().slice(0, 10), race: d.raceDate,
+        nw, phases: ['Base','Volume','Spécifique','Pic','Affûtage'], phaseStart: scalePhases(nw),
+        recommendedDays: d.distanceKm ? `Pour ${d.name} (${d.distanceKm} km${d.elevationM ? ', ' + d.elevationM + ' m D+' : ''}), adapte le nombre de jours à l'intensité de l'épreuve.` : '',
+        description: [d.description, d.distanceKm ? d.distanceKm + ' km' : '', d.elevationM ? d.elevationM + ' m D+' : '', d.location].filter(Boolean).join(' · '),
+        raceSession: {title: d.name, desc: `Jour J. ${d.description || ''} Pars prudent, fais confiance à ta préparation.`}
+      };
+      setActiveEvent(id); ensureEvent(); S.viewEventId = id; cur = weekOf(new Date()); vw = cur;
+      persist(); tab = 'sem'; render();
+    } catch (er) { if (msg) msg.textContent = "Le texte collé n'est pas reconnu. Vérifie que tu as bien copié tout le bloc JSON renvoyé par Claude."; }
+    return;
   }
   if (a === 'addSport') {
     const inp = $('#f-sport-input'); addSportValue(inp.value); inp.value = ''; inp.focus(); return;
@@ -670,6 +795,31 @@ document.addEventListener('click', async e => {
     $('#f-sports-json').value = JSON.stringify(arr.filter(x => x !== b.dataset.sport));
     b.closest('[data-sport-chip]').remove(); return;
   }
+  if (a === 'copyPrompt') { showModal('Mes informations pour Claude', planPrompt(), false); return; }
+  if (a === 'importPlan') {
+    try {
+      const parsed = JSON.parse($('#f-plan-json').value);
+      const weeksArr = Array.isArray(parsed) ? parsed : parsed.weeks;
+      if (!Array.isArray(weeksArr) || !weeksArr.length) throw 0;
+      const byIndex = {};
+      weeksArr.forEach(w => {
+        if (typeof w.i !== 'number' || !Array.isArray(w.sessions)) return;
+        const seen = new Set();
+        const sessions = w.sessions.filter(s => s && s.day && !seen.has(s.day) && seen.add(s.day)).map(s => ({
+          day: s.day, type: String(s.type || 'seance'), title: String(s.title || 'Séance').slice(0, 60),
+          desc: String(s.desc || '').slice(0, 400), min: Math.max(0, Math.round(num(s.min))), run: !!s.run
+        }));
+        byIndex[w.i] = {rec: !!w.rec, sessions};
+      });
+      if (!Object.keys(byIndex).length) throw 0;
+      ev().plan = byIndex;
+      rebuild(); persist(); tab = 'sem'; vw = Math.max(cur, ev().startIdx); render();
+    } catch (er) {
+      const msg = $('#planImportMsg'); if (msg) msg.textContent = "Le texte collé n'est pas reconnu. Vérifie que tu as bien copié tout le bloc JSON renvoyé par Claude.";
+    }
+    return;
+  }
+  if (a === 'genPlan') { tab = 'genPlan'; render(); return; }
   if (a === 'editProfile') { tab = 'editProfile'; render(); return; }
   if (a === 'editEvent') { tab = 'editEvent'; render(); return; }
   if (a === 'tab') { tab = b.dataset.v; if (tab === 'grp') ensureGroup(); render(); window.scrollTo(0, 0); return; }
@@ -686,8 +836,16 @@ document.addEventListener('click', async e => {
   if (a === 'undo') { delete ev().overrides[+b.dataset.i]; rebuild(); persist(); render(); return; }
   if (a === 'copy') { showModal('Mon retour de la semaine', feedbackText(), false); return; }
   if (a === 'share') { S.share = !S.share; persist(); render(); return; }
-  if (a === 'export') { showModal('Mes données', JSON.stringify({profile:S.profile, events:S.events, share:S.share}), false); return; }
+  if (a === 'export') { showModal('Mes données', JSON.stringify({profile:S.profile, events:S.events, customEvents:S.customEvents, viewEventId:S.viewEventId, share:S.share}), false); return; }
   if (a === 'import') { showModal('Importer mes données', '', true); return; }
+  if (a === 'reset') {
+    if (!confirm('Tout effacer (profil, course, séances) et repartir de zéro sur cet appareil ? Pense à exporter avant si tu veux garder une sauvegarde.')) return;
+    try { localStorage.removeItem(KEY); } catch (e) {}
+    if ('caches' in window) { try { const ks = await caches.keys(); ks.forEach(k => caches.delete(k)); } catch (e) {} }
+    if ('serviceWorker' in navigator) { try { const rs = await navigator.serviceWorker.getRegistrations(); rs.forEach(r => r.unregister()); } catch (e) {} }
+    location.reload();
+    return;
+  }
   if (a === 'gopen') { gOpen = gOpen === b.dataset.id ? null : b.dataset.id; gWeek = cur; render(); return; }
   if (a === 'gwk') { gWeek = Math.max(0, Math.min(EVENT.nw - 1, gWeek + +b.dataset.d)); render(); return; }
 });
@@ -709,7 +867,7 @@ function ensureGroup() {
 }
 async function boot() {
   try { const raw = localStorage.getItem(KEY); if (raw) S = Object.assign(S, JSON.parse(raw)); } catch (e) {}
-  rebuild(); if (S.profile) vw = Math.max(cur, ev().startIdx); render();
+  syncActiveEvent(); rebuild(); if (S.profile && ev()) vw = Math.max(cur, ev().startIdx); render();
   await Store.init();
   if (!Store.ok) return;
   try {
@@ -718,7 +876,7 @@ async function boot() {
       const remote = JSON.parse(r.json);
       if ((remote.updated || 0) > (S.updated || 0)) {
         S = remote; try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {}
-        rebuild(); if (S.profile) vw = Math.max(cur, ev().startIdx); render();
+        syncActiveEvent(); rebuild(); if (S.profile && ev()) vw = Math.max(cur, ev().startIdx); render();
       } else if (S.profile) { dirty = true; flush(); }
     } else if (S.profile) { dirty = true; flush(); }
   } catch (e) {}
